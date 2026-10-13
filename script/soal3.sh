@@ -36,3 +36,8 @@ EOF
 udhcpc -i eth0
 ip a
 ip route
+
+
+# PENAMBAHAN KONFIGURASI DI SETIAP CLIENT ALPINET
+   auto eth0
+   iface eth0 inet dhcp
