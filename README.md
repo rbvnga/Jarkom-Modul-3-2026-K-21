@@ -212,8 +212,193 @@ ping -c 2 google.com    # resolusi DNS
 ## 2
 **Konfigurasikan isc-dhcp-server pada [PREFIX IP].4.10. Deklarasikan Network 4 ([PREFIX IP].4.0/24) sebagai subnet lokal tanpa pool dinamis, lalu siapkan scope DHCP untuk Network 2 ([PREFIX IP].2.0/24) dan Network 3 ([PREFIX IP].3.0/24). Validasi konfigurasi dan pastikan service aktif tanpa error “No subnet declaration”**
 
+## 2.1 Tujuan
+ 
+1. Mengonfigurasi **isc-dhcp-server** pada **tengen** (`10.74.4.10`).
+2. Mendeklarasikan **Network 4** (`10.74.4.0/24`) sebagai subnet lokal **tanpa pool dinamis**.
+3. Menyiapkan scope DHCP untuk **Network 2** (`10.74.2.0/24`) dan **Network 3** (`10.74.3.0/24`).
+4. Memvalidasi konfigurasi dan memastikan service aktif tanpa error **"No subnet declaration"**.
+## 2.2 Tabel Rancangan
+ 
+| Parameter | Network 4 | Network 2 | Network 3 |
+|---|---|---|---|
+| Peran | Subnet lokal tengen | Divisi A | Divisi B |
+| Subnet | 10.74.4.0/24 | 10.74.2.0/24 | 10.74.3.0/24 |
+| Pool dinamis | Tidak ada | 10.74.2.10 - 10.74.2.100 | 10.74.3.10 - 10.74.3.100 |
+| Gateway (`routers`) | - | 10.74.2.1 | 10.74.3.1 |
+| Broadcast | - | 10.74.2.255 | 10.74.3.255 |
+| DNS | - | 10.74.1.2, 10.74.1.3 | 10.74.1.2, 10.74.1.3 |
+ 
+Parameter umum: `default-lease-time 600`, `max-lease-time 7200`, `authoritative`.
+ 
+## 2.3 Langkah Konfigurasi
+ 
+Seluruh konfigurasi dibuat dalam satu script `/root/setup_tengen.sh` yang menjalankan setiap langkah hanya jika belum dikerjakan.
+ 
+### 2.3.1 Instalasi isc-dhcp-server
+
+ 
+```bash
+  apt-get install -y isc-dhcp-server
+```
+ 
+### 2.3.2 Menentukan interface DHCP
+ 
+Berkas `/etc/default/isc-dhcp-server` diatur agar server mendengarkan permintaan DHCP pada `eth0`:
+ 
+```bash
+cat <<'EOF' > /etc/default/isc-dhcp-server
+INTERFACESv4="eth0"
+INTERFACESv6=""
+EOF
+```
+ 
+### 2.3.3 Konfigurasi `dhcpd.conf`
+ 
+```bash
+cat <<'EOF' > /etc/dhcp/dhcpd.conf
+default-lease-time 600;
+max-lease-time 7200;
+authoritative;
+ 
+# Network 4 - subnet lokal tengen, TANPA pool dinamis
+subnet 10.74.4.0 netmask 255.255.255.0 {
+}
+ 
+# Network 2 - Divisi A (lewat DHCP relay)
+subnet 10.74.2.0 netmask 255.255.255.0 {
+  range 10.74.2.10 10.74.2.100;
+  option routers 10.74.2.1;
+  option broadcast-address 10.74.2.255;
+  option domain-name-servers 10.74.1.2, 10.74.1.3;
+}
+ 
+# Network 3 - Divisi B (lewat DHCP relay)
+subnet 10.74.3.0 netmask 255.255.255.0 {
+  range 10.74.3.10 10.74.3.100;
+  option routers 10.74.3.1;
+  option broadcast-address 10.74.3.255;
+  option domain-name-servers 10.74.1.2, 10.74.1.3;
+}
+EOF
+```
+ 
+Penjelasan:
+ 
+- **Blok Network 4 dibiarkan kosong.** Server mencari deklarasi subnet yang cocok dengan IP interface `eth0` (10.74.4.10). Jika tidak ada, muncul error *"No subnet declaration for eth0"*. Blok tanpa `range` memenuhi syarat itu tanpa membagikan IP di Network 4, karena host di sana memakai IP statis.
+- **Scope Network 2 dan 3** disiapkan untuk klien yang meminta alamat melalui DHCP relay (jichi). Opsi `routers` diisi gateway tiap network.
+
+### 2.3.4 File lease dan menjalankan service
+ 
+```bash
+mkdir -p /var/lib/dhcp
+[ -f /var/lib/dhcp/dhcpd.leases ] || touch /var/lib/dhcp/dhcpd.leases
+ 
+dhcpd -t -cf /etc/dhcp/dhcpd.conf
+service isc-dhcp-server restart
+service isc-dhcp-server status
+```
+ 
+- File `dhcpd.leases` harus ada agar service bisa start, khususnya di container.
+- `dhcpd -t` memvalidasi sintaks konfigurasi sebelum service dijalankan ulang.
+ 
+## 2.4 Validasi
+ 
+```bash
+dhcpd -t -cf /etc/dhcp/dhcpd.conf
+ps aux | grep dhcpd
+service isc-dhcp-server status
+```
+<img src="images/soal2_bukti.png">
+
 ## 3
 **Permintaan alamat dari Divisi A dan Divisi B tidak dapat menyeberangi subnet secara langsung. Konfigurasikan jichi sebagai DHCP Relay menuju tengen ([PREFIX IP].4.10), menggunakan eth2 untuk Network 2 dan eth3 untuk Network 3. Buktikan bahwa client dari kedua subnet berhasil memperoleh lease melalui relay.**
+
+## 3.1 Tujuan
+ 
+1. Mengonfigurasi **jichi** sebagai **DHCP Relay** menuju **tengen** (`10.74.4.10`).
+2. Menggunakan **eth2** untuk Network 2 (Divisi A) dan **eth3** untuk Network 3 (Divisi B).
+3. Membuktikan bahwa klien dari kedua subnet berhasil memperoleh lease melalui relay.
+## 3.2 Latar Belakang
+ 
+Klien meminta alamat IP dengan paket **broadcast** (`DHCPDISCOVER`). Broadcast hanya menjangkau satu subnet dan tidak diteruskan oleh router. Karena DHCP Server (tengen) berada di Network 4, permintaan dari Network 2 dan 3 tidak dapat menjangkaunya secara langsung.
+ 
+DHCP Relay pada jichi menyelesaikan masalah ini:
+ 
+```
+klien (Net 2/3) --broadcast--> jichi (relay) --unicast--> tengen (10.74.4.10)
+klien (Net 2/3) <--balasan---- jichi (relay) <--unicast-- tengen
+```
+ 
+Saat meneruskan paket, relay mengisi kolom `giaddr` dengan alamat interface-nya sendiri (`10.74.2.1` atau `10.74.3.1`). Tengen memakai `giaddr` itu untuk memilih scope yang sesuai (Network 2 atau Network 3).
+ 
+## 3.3 Tabel Rancangan
+ 
+| Parameter | Nilai |
+|---|---|
+| Node relay | jichi |
+| DHCP Server tujuan | tengen, `10.74.4.10` |
+| Interface sisi klien | eth2 (Network 2), eth3 (Network 3) |
+| Interface jalur ke server | eth4 (Network 4) |
+| Paket | `isc-dhcp-relay` |
+| Berkas konfigurasi | `/etc/default/isc-dhcp-relay` |
+ 
+## 3.4 Langkah Konfigurasi di jichi
+ 
+Konfigurasi disimpan dalam script `/root/setup_jichi.sh`
+ 
+### 3.4.1 Instalasi isc-dhcp-relay
+ 
+```bash
+  DEBIAN_FRONTEND=noninteractive apt-get install -y isc-dhcp-relay 
+```
+ 
+`DEBIAN_FRONTEND=noninteractive` mencegah instalasi berhenti untuk menanyakan konfigurasi secara interaktif.
+ 
+### 3.4.2 Konfigurasi relay
+ 
+```bash
+cat <<'EOF' > /etc/default/isc-dhcp-relay
+SERVERS="10.74.4.10"
+INTERFACES="eth2 eth3 eth4"
+OPTIONS=""
+EOF
+```
+ 
+Penjelasan:
+ 
+- `SERVERS` adalah alamat DHCP Server tujuan penerusan, yaitu tengen.
+- `INTERFACES` berisi interface tempat relay mendengarkan. **eth2** dan **eth3** menerima broadcast dari klien Network 2 dan 3. **eth4** adalah jalur ke tengen sehingga balasan dari server dapat diterima dan diteruskan kembali ke klien.
+
+### 3.4.3 Menjalankan service
+ 
+```bash
+service isc-dhcp-relay restart
+service isc-dhcp-relay status
+ps aux | grep '[d]hcrelay'
+```
+ 
+ 
+## 3.5 Pembuktian
+ 
+### 3.5.1 Relay aktif di jichi
+ 
+```bash
+ps aux | grep '[d]hcrelay'
+```
+<img src="images/soal3_bukti2.png">
+
+### 3.5.2 Klien meminta IP
+ 
+Dijalankan pada klien Alpine di masing-masing network:
+ 
+```bash
+udhcpc -i eth0
+ip a
+ip route
+```
+<img src="images/soal3_bukti.png">
+
 
 ## 4
 **Agar tim Dev dan Support di Divisi A menerima jatah alamat yang berbeda, atur dua pool DHCP pada Network 2. Tetapkan Pool 1 ([PREFIX IP].2.10–[PREFIX IP].2.35) untuk itadori dan fushiguro, serta Pool 2 ([PREFIX IP].2.70–[PREFIX IP].2.95) untuk zenin dan okkotsu. Rentang [PREFIX IP].2.36–[PREFIX IP].2.69 tidak boleh dialokasikan. Karena seluruh client berada pada subnet yang sama, gunakan DHCP class berdasarkan MAC Address atau Client ID untuk memisahkan kedua kelompok.**
