@@ -218,5 +218,5 @@ cat /etc/resolv.conf
 udhcpc -i eth0
 
 
-# cek lease dari tengen
+# cek leasses dari tengen
 cat /var/lib/dhcp/dhcpd.leases 
