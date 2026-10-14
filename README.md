@@ -507,6 +507,140 @@ ip a
 ## 5
 **Setiap tim lapangan memiliki durasi operasi yang berbeda. Pada Network 3, berikan short lease 30 menit (1800 detik) kepada ino dan kusakabe, serta long lease 12 jam (43200 detik) kepada miwa. Gunakan pool short lease [PREFIX IP].3.10–[PREFIX IP].3.89 dan pool long lease [PREFIX IP].3.100–[PREFIX IP].3.199. Sesuaikan default-lease-time dan max-lease-time untuk setiap kelas client. Berikan pula DHCP options berupa DNS [PREFIX IP].1.2 dan [PREFIX IP].1.3, serta domain-search <xxxx>.com.**
 
+## 5.1 Tujuan
+
+1. Memberikan **short lease 30 menit (1800 detik)** kepada **ino** dan **kusakabe**.
+2. Memberikan **long lease 12 jam (43200 detik)** kepada **miwa**.
+3. Menggunakan pool short lease `10.74.3.10 - 10.74.3.89` dan pool long lease `10.74.3.100 - 10.74.3.199`.
+4. Menyesuaikan `default-lease-time` dan `max-lease-time` untuk setiap kelas klien.
+5. Memberikan DHCP options berupa DNS `10.74.1.2` dan `10.74.1.3`, serta `domain-search K-21.com`.
+
+## 5.2 Tabel Rancangan
+
+| Kelompok | Klien | Pool | default-lease-time | max-lease-time |
+|---|---|---|---|---|
+| short-lease | ino, kusakabe | 10.74.3.10 - 10.74.3.89 | 1800 detik (30 menit) | 1800 detik |
+| long-lease | miwa | 10.74.3.100 - 10.74.3.199 | 43200 detik (12 jam) | 43200 detik |
+
+Rentang `10.74.3.90 - 10.74.3.99` tidak dimasukkan ke pool mana pun.
+
+DHCP options untuk seluruh klien:
+
+| Option | Nilai |
+|---|---|
+| routers | 10.74.3.1 |
+| domain-name-servers | 10.74.1.2, 10.74.1.3 |
+| domain-search | K-21.com |
+
+### 5.2.1 MAC Address klien Network 3
+
+| Klien | Kelompok | MAC Address |
+|---|---|---|
+| ino | short-lease | `02:42:b6:4e:2a:00` |
+| kusakabe | short-lease | `02:42:da:db:58:00` |
+| miwa | long-lease | `02:42:58:d7:86:00` |
+
+MAC diperoleh dengan menjalankan perintah berikut pada setiap klien (nilai setelah `link/ether`):
+
+```bash
+ip link show eth0
+```
+
+## 5.3 Langkah Konfigurasi
+
+### 5.3.1 Class berdasarkan MAC Address
+
+Karena seluruh klien Network 3 berada pada subnet yang sama, kelompok dibedakan dengan `class` berbasis MAC. Lama lease ditentukan di dalam masing-masing class sehingga hanya berlaku untuk anggotanya.
+
+```bash
+class "short-lease" {
+  match if (substring(hardware, 1, 6) = 02:42:b6:4e:2a:00
+         or substring(hardware, 1, 6) = 02:42:da:db:58:00);
+  default-lease-time 1800;
+  max-lease-time 1800;
+}
+
+class "long-lease" {
+  match if (substring(hardware, 1, 6) = 02:42:58:d7:86:00);
+  default-lease-time 43200;
+  max-lease-time 43200;
+}
+```
+
+`default-lease-time` dan `max-lease-time` dibuat sama agar klien tidak dapat meminta lease lebih lama dari ketentuan kelasnya.
+
+### 5.3.2 Pool dan options pada Network 3
+
+```bash
+option domain-search "K-21.com";
+
+subnet 10.74.3.0 netmask 255.255.255.0 {
+  option routers 10.74.3.1;
+  option broadcast-address 10.74.3.255;
+  option domain-name-servers 10.74.1.2, 10.74.1.3;
+
+  pool {
+    range 10.74.3.10 10.74.3.89;
+    allow members of "short-lease";
+  }
+
+  pool {
+    range 10.74.3.100 10.74.3.199;
+    allow members of "long-lease";
+  }
+}
+```
+
+Penjelasan:
+
+- `allow members of` membatasi pool agar hanya dipakai oleh klien pada class yang bersangkutan.
+- `option domain-search` ditempatkan di luar blok subnet sehingga berlaku untuk seluruh network.
+- Klien Network 3 yang MAC-nya tidak termasuk kedua class tidak memperoleh IP dari pool ini.
+
+
+## 5.4 Validasi dan Pembuktian
+
+### 5.4.1 IP dan lease time yang diperoleh klien
+
+Pada ino, kusakabe, dan miwa dijalankan:
+
+```bash
+ip route
+ip a
+cat /etc/resolv.conf
+udhcpc -i eth0
+```
+
+Pada tengen dijalankan:
+
+```bash
+cat /var/lib/dhcp/dhcpd.leases
+```
+
+| Klien | Kelompok | Rentang seharusnya | IP yang diperoleh | Lease time | 
+|---|---|---|---|---|---|
+| ino | short-lease | 10.74.3.10 - 10.74.3.89 | 10.74.3.10  | 1800 atau 30 menit | 
+| kusakabe | short-lease | 10.74.3.10 - 10.74.3.89 | 10.74.3.12  | 1800 atau 30 menit | 
+| miwa | long-lease | 10.74.3.100 - 10.74.3.199 | 10.74.3.100 | 43200 | 
+
+Pada `ip route`, klien seharusnya memiliki default route melalui `10.74.3.1`. Pada `/etc/resolv.conf`, nameserver seharusnya memuat `10.74.1.2` dan `10.74.1.3`.
+- ino 
+
+<img src="images/soal5_bukti_ino.png">
+<img src="images/soal5_bukti_leases_ino.png">
+
+- kukasabe
+
+<img src="images/soal5_bukti_kusakabe.png">
+<img src="images/soal5_bukti_leases_kusakabe.png">
+
+- miwa 
+
+<img src="images/soal5_bukti_miwa.png">
+
+
+
+
 ## 6
 **Kugisaki ditetapkan sebagai personel VIP yang harus mempertahankan alamat yang sama setiap kali terhubung. Buat DHCP static lease berdasarkan MAC Address client tersebut dengan fixed address [PREFIX IP].3.99. Pastikan alamat ini berada di luar seluruh pool dinamis, validasi konfigurasi server, lalu renew lease pada client. Buktikan bahwa alamat yang diterima sesuai dengan reservasi.**
 
