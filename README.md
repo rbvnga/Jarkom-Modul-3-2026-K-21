@@ -1164,8 +1164,175 @@ Bukti bahwa kugisaki memperoleh alamat sesuai reservasi diambil dari:
 ## 8
 **Sebelum Curtain dibuka kembali, buktikan bahwa proses pemberian alamat berjalan sesuai protokol. Lakukan packet capture saat salah satu client Network 2 atau Network 3 meminta lease baru. Gunakan tcpdump pada tengen atau jalur menuju Data Center untuk menunjukkan urutan DHCPDISCOVER → DHCPOFFER → DHCPREQUEST → DHCPACK. Identifikasi alamat server, alamat yang diberikan, lease time, dan field giaddr. Pastikan nilai giaddr sesuai dengan interface jichi yang menerima request dari subnet client.**
 
+## 8.1 Tujuan
+
+1. Menangkap paket (packet capture) saat salah satu klien Network 2 atau Network 3 meminta lease baru.
+2. Menunjukkan urutan **DHCPDISCOVER → DHCPOFFER → DHCPREQUEST → DHCPACK**.
+3. Mengidentifikasi **alamat server**, **alamat yang diberikan**, **lease time**, dan field **giaddr**.
+4. Memastikan nilai **giaddr** sesuai dengan interface jichi yang menerima permintaan dari subnet klien.
+
+
+## 8.3 Langkah Pengerjaan
+
+### 8.3.1 Memicu permintaan lease baru
+
+Pada klien itadori:
+
+```bash
+ip addr flush dev eth0
+udhcpc -i eth0
+ip a
+```
+
+`ip addr flush` melepas IP lama sehingga klien memulai proses dari awal (DISCOVER).
+
+## 8.4 Hasil Capture
+
+### 8.4.1 Urutan paket DHCP
+
+| No | Waktu | Sumber | Tujuan | Pesan DHCP | Transaction ID |
+|---|---|---|---|---|---|
+| 11 | 01:23:15,445 | 10.74.4.1 | 10.74.4.10 | **DHCP Discover** | 0x2dc7fc7e |
+| 12 | 01:23:15,446 | 10.74.4.10 | 10.74.2.1 | **DHCP Offer** | 0x2dc7fc7e |
+| 13 | 01:23:15,459 | 10.74.4.1 | 10.74.4.10 | **DHCP Request** | 0x2dc7fc7e |
+| 14 | 01:23:15,459 | 10.74.4.10 | 10.74.2.1 | **DHCP ACK** | 0x2dc7fc7e |
+
+### 8.4.2 Rincian paket DHCP Offer (No. 12)
+
+| Field | Nilai | Keterangan |
+|---|---|---|
+| Message type | Boot Reply (2) | Balasan dari server |
+| Hops | 1 | Paket melewati satu relay |
+| Transaction ID | 0x2dc7fc7e | Sama dengan Discover |
+| Client IP address | 0.0.0.0 | Klien belum memiliki alamat |
+| **Your (client) IP address** | **10.74.2.11** | Alamat yang ditawarkan |
+| Next server IP address | 0.0.0.0 | Tidak dipakai |
+| **Relay agent IP address (giaddr)** | **10.74.2.1** | Alamat interface jichi (eth2) |
+| Client MAC address | 02:42:be:59:63:00 | MAC itadori |
+| Bootp flags | 0x0000 (Unicast) | Balasan dikirim secara unicast |
+
+Opsi pada paket Offer, dibaca dari isi paket (hex dump):
+
+| Opsi | Nilai | Keterangan |
+|---|---|---|
+| 53 DHCP Message Type | 2 (Offer) | Jenis pesan |
+| **54 DHCP Server Identifier** | **10.74.4.10** | **Alamat server (tengen)** |
+| **51 IP Address Lease Time** | **496 detik** | **Lease time** (heksadesimal `00 00 01 f0`) |
+| 1 Subnet Mask | 255.255.255.0 | /24 |
+| 3 Router | 10.74.2.1 | Gateway Network 2 |
+| 6 Domain Name Server | 10.74.1.2, 10.74.1.3 | DNS |
+| 15 Domain Name | K-21.com | Domain kelompok |
+| 28 Broadcast Address | 10.74.2.255 | Broadcast Network 2 |
+
+> **Screenshot rincian paket Offer:** _(tempel hasil di sini)_
+
+### 8.4.3 Rincian paket DHCP ACK (No. 14)
+
+| Field | Nilai |
+|---|---|
+| Your (client) IP address | _(isi, dari paket 14)_ |
+| Relay agent IP address (giaddr) | 10.74.2.1 |
+| DHCP Server Identifier (54) | 10.74.4.10|
+| IP Address Lease Time (51) | 8 menit 16 detik (496)|
+
+> **Screenshot rincian paket ACK:** _(tempel hasil di sini)_
+
+### 8.4.4 Ringkasan identifikasi
+
+| Yang diminta soal | Hasil |
+|---|---|
+| Alamat server | `10.74.4.10` (tengen) |
+| Alamat yang diberikan | `10.74.2.11` |
+| Lease time | 496 detik pada paket Offer; nilai pada paket ACK: 8 menit 16 detik (496) |
+| giaddr | `10.74.2.1` |
+
+
+
 ## 9
 **Sebuah gangguan memutus jalur relay dan membuat permintaan alamat tidak sampai ke Data Center. Hentikan service DHCP Relay pada jichi, lalu paksa salah satu client di Network 2 atau Network 3 meminta lease baru dan catat gejalanya. Pulihkan service relay, ulangi permintaan DHCP, lalu buktikan bahwa client kembali memperoleh alamat dari pool yang benar dengan gateway semula.**
+
+## 9.1 Tujuan
+
+1. Menghentikan service **DHCP Relay** pada jichi untuk mensimulasikan gangguan yang memutus jalur permintaan alamat menuju Data Center.
+2. Memaksa salah satu klien pada Network 2 meminta lease baru, lalu **mencatat gejalanya**.
+3. **Memulihkan** service relay.
+4. Mengulang permintaan DHCP dan membuktikan klien kembali memperoleh alamat dari **pool yang benar** dengan **gateway semula**.
+
+## 9.2 Langkah Pengerjaan
+### 9.2.1 Kondisi normal sebelum gangguan
+
+Pada jichi, relay aktif:
+
+```bash
+ps aux | grep '[d]hcrelay'
+```
+<img src="images/soal9_state_awal.png">
+
+ip awal yang diperoleh itadori (client)
+<img src="images/soal9_state_awal_itadori.png">
+
+
+### 9.3.2 Mematikan relay pada jichi
+
+```bash
+service isc-dhcp-relay stop
+pkill dhcrelay
+ps aux | grep '[d]hcrelay'
+```
+<img src="images/soal9_jichi_stop.png">
+
+### 9.3.3 Memaksa klien meminta lease baru
+
+Pada itadori:
+
+```bash
+date
+ip addr flush dev eth0
+udhcpc -i eth0 -n -t 3
+ip -4 a show eth0
+ip route
+```
+
+- `ip addr flush dev eth0` melepas IP lama agar gangguan terlihat. Tanpa ini klien masih memegang alamat lama.
+- `udhcpc -n -t 3` membuat klien berhenti setelah 3 kali percobaan dan tidak mengulang tanpa henti.
+
+<img src="images/soal9_itadori_stop.png">
+
+### 9.3.4 Memulihkan relay pada jichi
+
+```bash
+service isc-dhcp-relay start
+ps aux | grep '[d]hcrelay'
+```
+<img src="images/soal9_jichi_start.png_">
+
+### 9.3.5 Mengulang permintaan lease pada klien
+
+```bash
+date
+udhcpc -i eth0
+ip -4 a show eth0
+ip route
+```
+<img src="images/soal9_itadori_start.png">
+
+
+## 9.4 Hasil
+
+| Waktu (UTC) | Node | Kejadian |
+|---|---|---|
+| 18:57 | jichi | Relay berjalan (PID 480) |
+| Antara 18:57 dan 18:58:46 | jichi | Relay dihentikan dengan `service isc-dhcp-relay stop` dan `pkill dhcrelay`; `ps` tidak menampilkan proses |
+| 18:58:46 | itadori | Klien melepas IP dan meminta lease. Hasil: **gagal** |
+| 19:00 | jichi | Relay dinyalakan kembali (PID 503) |
+| 19:00:51 | itadori | Klien meminta lease. Hasil: **berhasil** |
+
+| Pengamatan | Hasil |
+|---|---|
+| Keluaran `udhcpc` | Tiga kali `broadcasting discover` tanpa tanggapan, lalu `udhcpc failed to get a DHCP lease` |
+| Tahap `select` | Tidak muncul, karena tidak ada `OFFER` dari server |
+| `ip -4 a show eth0` | Tidak ada alamat IPv4 |
+| `ip route` | Tidak ada rute, termasuk default route |
 
 ## 10
 **Setelah gangguan Shibuya tertangani, pastikan pemulihan bertahan setelah restart. Aktifkan autostart DHCP Server pada tengen dan DHCP Relay pada jichi, lalu restart kedua node. Verifikasi status layanan, IP, gateway, lease, dan konektivitas client Network 2–3. Pastikan kebijakan Pool 1, Pool 2, short lease, long lease, dan fixed address tetap berlaku.**
