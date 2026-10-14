@@ -403,6 +403,107 @@ ip route
 ## 4
 **Agar tim Dev dan Support di Divisi A menerima jatah alamat yang berbeda, atur dua pool DHCP pada Network 2. Tetapkan Pool 1 ([PREFIX IP].2.10–[PREFIX IP].2.35) untuk itadori dan fushiguro, serta Pool 2 ([PREFIX IP].2.70–[PREFIX IP].2.95) untuk zenin dan okkotsu. Rentang [PREFIX IP].2.36–[PREFIX IP].2.69 tidak boleh dialokasikan. Karena seluruh client berada pada subnet yang sama, gunakan DHCP class berdasarkan MAC Address atau Client ID untuk memisahkan kedua kelompok.**
 
+## 4.1 Tujuan
+
+1. Membuat dua pool DHCP pada **Network 2** (`10.74.2.0/24`) agar tim Dev dan tim Support menerima rentang alamat yang berbeda.
+2. Memisahkan klien dengan **DHCP class** berdasarkan **MAC Address**, karena seluruh klien berada pada subnet yang sama.
+3. Memastikan rentang `10.74.2.36 - 10.74.2.69` **tidak dialokasikan** kepada klien mana pun.
+4. Membuktikan setiap klien memperoleh IP sesuai pool kelompoknya.
+
+## 4.2 Tabel Rancangan
+
+| Pool | Tim | Klien | Rentang IP |
+|---|---|---|---|
+| Pool 1 | Dev | itadori, fushiguro | 10.74.2.10 - 10.74.2.35 |
+| Pool 2 | Support | zenin, okkotsu | 10.74.2.70 - 10.74.2.95 |
+| Tidak dialokasikan | - | - | 10.74.2.36 - 10.74.2.69 |
+
+### 4.2.1 MAC Address klien
+
+| Pool | Klien | MAC Address |
+|---|---|---|
+| Pool 1 | itadori | `02:42:be:59:63:00` |
+| Pool 1 | fushiguro | `02:42:58:39:03:00` |
+| Pool 2 | zenin | `02:42:93:36:d2:00` |
+| Pool 2 | okkotsu (node akkotsu) | `02:42:6b:dc:19:00` |
+
+MAC diperoleh dengan menjalankan perintah berikut pada setiap klien (nilai setelah `link/ether`):
+
+```bash
+ip link show eth0
+```
+
+## 4.3 Langkah Konfigurasi ke `/etc/dhcp/dhcpd.conf (tengen)`
+
+### 4.3.1 Class berdasarkan MAC Address
+
+Setiap kelompok didefinisikan sebagai `class`. Klien dikenali dari 6 byte MAC yang dikirim pada paket DHCP.
+
+```bash
+class "pool1" {
+  match if (substring(hardware, 1, 6) = 02:42:be:59:63:00
+         or substring(hardware, 1, 6) = 02:42:58:39:03:00);
+}
+
+class "pool2" {
+  match if (substring(hardware, 1, 6) = 02:42:93:36:d2:00
+         or substring(hardware, 1, 6) = 02:42:6b:dc:19:00);
+}
+```
+
+Fungsi `substring(hardware, 1, 6)` mengambil 6 byte MAC. Byte pertama pada `hardware` adalah tipe perangkat keras, sehingga pengambilan dimulai dari posisi 1.
+
+### 4.3.2 Dua pool pada Network 2
+
+```bash
+subnet 10.74.2.0 netmask 255.255.255.0 {
+  option routers 10.74.2.1;
+  option broadcast-address 10.74.2.255;
+  option domain-name-servers 10.74.1.2, 10.74.1.3;
+
+  pool {
+    range 10.74.2.10 10.74.2.35;
+    allow members of "pool1";
+  }
+
+  pool {
+    range 10.74.2.70 10.74.2.95;
+    allow members of "pool2";
+  }
+}
+```
+
+Penjelasan:
+
+- `allow members of "pool1"` membatasi pool hanya untuk klien yang masuk class tersebut. Hal yang sama berlaku untuk `pool2`.
+- Rentang `10.74.2.36 - 10.74.2.69` tidak dimasukkan ke pool mana pun, sehingga tidak pernah dialokasikan.
+- Klien yang MAC-nya tidak termasuk kedua class tidak memperoleh IP dari Network 2.
+
+## 4.4 Validasi dan Pembuktian
+
+### 4.4.1 IP yang diperoleh klien
+
+Pada setiap klien Network 2 dijalankan:
+
+```bash
+udhcpc -i eth0
+ip route
+ip a
+```
+
+| Klien | Pool | Rentang seharusnya | IP yang diperoleh |
+|---|---|---|---|---|
+| itadori | Pool 1 | 10.74.2.10 - 10.74.2.35 | 10.74.2.10 | 
+| fushiguro | Pool 1 | 10.74.2.10 - 10.74.2.35 |  10.74.2.11 | 
+| zenin | Pool 2 | 10.74.2.70 - 10.74.2.95 |  10.74.2.71 | 
+| okkotsu | Pool 2 | 10.74.2.70 - 10.74.2.95 |  10.74.2.70 | 
+
+
+<img src="images/soal4_bukti_pool1_fushiguro.pngsoal4_">
+<img src="images/soal4_bukti_pool1_itadori.png">
+<img src="images/soal4_bukti_pool2_okkotsu.png">
+<img src="images/soal4_bukti_pool2_zenin.png">
+
 ## 5
 **Setiap tim lapangan memiliki durasi operasi yang berbeda. Pada Network 3, berikan short lease 30 menit (1800 detik) kepada ino dan kusakabe, serta long lease 12 jam (43200 detik) kepada miwa. Gunakan pool short lease [PREFIX IP].3.10–[PREFIX IP].3.89 dan pool long lease [PREFIX IP].3.100–[PREFIX IP].3.199. Sesuaikan default-lease-time dan max-lease-time untuk setiap kelas client. Berikan pula DHCP options berupa DNS [PREFIX IP].1.2 dan [PREFIX IP].1.3, serta domain-search <xxxx>.com.**
 

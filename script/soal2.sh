@@ -67,3 +67,5 @@ EOF
 # VALIDASI KONFIGURASI
 dhcpd -t -cf /etc/dhcp/dhcpd.conf
 ps aux | grep dhcpd
+
+
