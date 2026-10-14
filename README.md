@@ -886,6 +886,281 @@ ip route
 ## 7
 **Setelah aturan alokasi diterapkan, pastikan setiap client menerima konfigurasi jaringan sesuai wilayahnya: subnet mask 255.255.255.0 (/24), gateway dan broadcast address yang benar, DNS [PREFIX IP].1.2 serta [PREFIX IP].1.3, dan domain-search yang ditentukan. Periksa IP address dan routing seluruh client Divisi A dan Divisi B, kemudian cocokkan lease dengan /var/lib/dhcp/dhcpd.leases pada tengen. Pastikan tidak ada alamat yang bertabrakan atau berada di luar kebijakan pool.**
 
+## 7.1 Tujuan
+ 
+Setelah seluruh aturan alokasi DHCP diterapkan, dilakukan pemeriksaan bahwa setiap klien menerima konfigurasi jaringan sesuai wilayahnya:
+ 
+1. Subnet mask `255.255.255.0` (/24).
+2. Gateway dan broadcast address yang benar.
+3. DNS `10.74.1.2` dan `10.74.1.3`.
+4. Domain-search yang ditentukan (`K-21.com`).
+5. IP address dan routing seluruh klien Divisi A dan Divisi B diperiksa, kemudian dicocokkan dengan `/var/lib/dhcp/dhcpd.leases` pada tengen.
+6. Tidak ada alamat yang bertabrakan atau berada di luar kebijakan pool.
+## 7.2 Tabel Rancangan
+ 
+ 
+### 7.2.1 Kebijakan alokasi per klien
+ 
+| Divisi | Klien | MAC Address | Kebijakan | Rentang yang diizinkan | Lease time |
+|---|---|---|---|---|---|
+| A | itadori | `02:42:be:59:63:00` | Pool 1 | 10.74.2.10 - 10.74.2.35 | 600 detik |
+| A | fushiguro | `02:42:58:39:03:00` | Pool 1 | 10.74.2.10 - 10.74.2.35 | 600 detik |
+| A | zenin | `02:42:93:36:d2:00` | Pool 2 | 10.74.2.70 - 10.74.2.95 | 600 detik |
+| A | okkotsu | `02:42:6b:dc:19:00` | Pool 2 | 10.74.2.70 - 10.74.2.95 | 600 detik |
+| B | ino | `02:42:b6:4e:2a:00` | Short lease | 10.74.3.10 - 10.74.3.89 | 1800 detik |
+| B | kusakabe | `02:42:da:db:58:00` | Short lease | 10.74.3.10 - 10.74.3.89 | 1800 detik |
+| B | miwa | `02:42:58:d7:86:00` | Long lease | 10.74.3.100 - 10.74.3.199 | 43200 detik |
+| B | kugisaki | `02:42:7c:b4:fc:00` | Static lease | 10.74.3.99 (reservasi) | 600 detik |
+ 
+Rentang yang tidak boleh dialokasikan secara dinamis: `10.74.2.36 - 10.74.2.69` (Network 2) serta `10.74.3.90 - 10.74.3.99` (Network 3, `10.74.3.99` khusus untuk reservasi kugisaki).
+ 
+## 7.3 Perubahan yang Dilakukan
+ 
+| No | Bagian | Perubahan | Alasan |
+|---|---|---|---|
+| 1 | `dhcpd.conf`, bagian global | Menambah `option domain-name "K-21.com";` | Pada pengujian sebelumnya, `/etc/resolv.conf` klien hanya memuat baris `nameserver` tanpa baris `search`. Opsi `domain-name` (opsi DHCP nomor 15) diminta klien `udhcpc` secara bawaan, sehingga domain dapat diterima klien. Opsi `domain-search` tetap dipertahankan. |
+| 2 | Penanda penulisan config pada `setup_tengen.sh` | Menambah pengecekan `option domain-name` pada perulangan `for M in ...` | Agar `dhcpd.conf` ditulis ulang otomatis ketika opsi baru belum ada |
+ 
+Tidak ada perubahan pada jichi maupun pada klien.
+ 
+## 7.4 Langkah Pemeriksaan
+ 
+### 7.4.1 Script `setup_tengen.sh`
+ 
+```bash
+#!/bin/bash
+# TENGEN - DHCP Server (isc-dhcp-server) 10.74.4.10
+ 
+KELOMPOK="K-21"
+ 
+# MAC ADDRESS KLIEN NETWORK 2
+MAC_ITADORI="02:42:be:59:63:00"
+MAC_FUSHIGURO="02:42:58:39:03:00"
+MAC_ZENIN="02:42:93:36:d2:00"
+MAC_OKKOTSU="02:42:6b:dc:19:00"
+ 
+# MAC ADDRESS KLIEN NETWORK 3
+MAC_INO="02:42:b6:4e:2a:00"
+MAC_KUSAKABE="02:42:da:db:58:00"
+MAC_MIWA="02:42:58:d7:86:00"
+MAC_KUGISAKI="02:42:7c:b4:fc:00"
+ 
+# Pastikan eth0 punya IP statis tengen dan rute default ke jichi
+if ! ip -4 addr show eth0 | grep -q '10.74.4.10/24'; then
+  ip addr add 10.74.4.10/24 dev eth0 2>/dev/null
+  ip link set eth0 up
+fi
+ip route replace default via 10.74.4.1
+ 
+# Install jika belum terpasang
+if ! dpkg -s isc-dhcp-server >/dev/null 2>&1; then
+  apt-get update >/dev/null 2>&1
+  apt-get install -y isc-dhcp-server >/dev/null 2>&1
+fi
+ 
+# Interface DHCP
+if ! grep -q '^INTERFACESv4="eth0"' /etc/default/isc-dhcp-server 2>/dev/null; then
+  cat <<'EOF' > /etc/default/isc-dhcp-server
+INTERFACESv4="eth0"
+INTERFACESv6=""
+EOF
+fi
+ 
+# File lease
+mkdir -p /var/lib/dhcp
+[ -f /var/lib/dhcp/dhcpd.leases ] || touch /var/lib/dhcp/dhcpd.leases
+ 
+# dhcpd.conf: ditulis ulang jika belum memuat semua MAC, domain-search, dan domain-name kelompok
+ADA=1
+for M in $MAC_ITADORI $MAC_FUSHIGURO $MAC_ZENIN $MAC_OKKOTSU $MAC_INO $MAC_KUSAKABE $MAC_MIWA $MAC_KUGISAKI "$KELOMPOK.com" "option domain-name \"$KELOMPOK.com\""; do
+  grep -q "$M" /etc/dhcp/dhcpd.conf 2>/dev/null || ADA=0
+done
+ 
+if [ "$ADA" = 0 ]; then
+  service isc-dhcp-server stop >/dev/null 2>&1
+  : > /var/lib/dhcp/dhcpd.leases   # kosongkan lease lama agar pengujian bersih
+  cat <<EOF > /etc/dhcp/dhcpd.conf
+default-lease-time 600;
+max-lease-time 7200;
+authoritative;
+ 
+option domain-search "$KELOMPOK.com";
+option domain-name "$KELOMPOK.com";
+ 
+# Class Network 2: Pool 1 (itadori, fushiguro) dan Pool 2 (zenin, okkotsu)
+class "pool1" {
+  match if (substring(hardware, 1, 6) = $MAC_ITADORI
+         or substring(hardware, 1, 6) = $MAC_FUSHIGURO);
+}
+ 
+class "pool2" {
+  match if (substring(hardware, 1, 6) = $MAC_ZENIN
+         or substring(hardware, 1, 6) = $MAC_OKKOTSU);
+}
+ 
+# Class Network 3: short lease 30 menit (ino, kusakabe), long lease 12 jam (miwa)
+class "short-lease" {
+  match if (substring(hardware, 1, 6) = $MAC_INO
+         or substring(hardware, 1, 6) = $MAC_KUSAKABE);
+  default-lease-time 1800;
+  max-lease-time 1800;
+}
+ 
+class "long-lease" {
+  match if (substring(hardware, 1, 6) = $MAC_MIWA);
+  default-lease-time 43200;
+  max-lease-time 43200;
+}
+ 
+# Network 4 - subnet lokal tengen, TANPA pool dinamis
+subnet 10.74.4.0 netmask 255.255.255.0 {
+}
+ 
+# Network 2 - Divisi A (lewat DHCP relay)
+# Rentang 10.74.2.36 - 10.74.2.69 tidak dialokasikan
+subnet 10.74.2.0 netmask 255.255.255.0 {
+  option routers 10.74.2.1;
+  option broadcast-address 10.74.2.255;
+  option domain-name-servers 10.74.1.2, 10.74.1.3;
+ 
+  pool {
+    range 10.74.2.10 10.74.2.35;
+    allow members of "pool1";
+  }
+ 
+  pool {
+    range 10.74.2.70 10.74.2.95;
+    allow members of "pool2";
+  }
+}
+ 
+# Network 3 - Divisi B (lewat DHCP relay)
+subnet 10.74.3.0 netmask 255.255.255.0 {
+  option routers 10.74.3.1;
+  option broadcast-address 10.74.3.255;
+  option domain-name-servers 10.74.1.2, 10.74.1.3;
+ 
+  pool {
+    range 10.74.3.10 10.74.3.89;
+    allow members of "short-lease";
+  }
+ 
+  pool {
+    range 10.74.3.100 10.74.3.199;
+    allow members of "long-lease";
+  }
+ 
+  # Static lease kugisaki (VIP): 10.74.3.99 berada di luar seluruh pool
+  host kugisaki {
+    hardware ethernet $MAC_KUGISAKI;
+    fixed-address 10.74.3.99;
+  }
+}
+EOF
+fi
+ 
+# Validasi lalu jalankan service
+dhcpd -t -cf /etc/dhcp/dhcpd.conf
+rm -f /var/run/dhcpd.pid
+service isc-dhcp-server restart
+service isc-dhcp-server status
+ps aux | grep '[d]hcpd'
+```
+ 
+### 7.4.2 Pemeriksaan pada setiap klien
+ 
+Dijalankan pada kedelapan klien (itadori, fushiguro, zenin, okkotsu, ino, kusakabe, miwa, kugisaki):
+ 
+```bash
+udhcpc -i eth0
+ip a
+ip route
+cat /etc/resolv.conf
+```
+ 
+- `udhcpc -i eth0` meminta lease baru dan menampilkan lama lease.
+- `ip a` menunjukkan IP address, subnet mask (/24), dan broadcast.
+- `ip route` menunjukkan gateway (default route).
+- `cat /etc/resolv.conf` menunjukkan DNS dan domain-search yang diterima.
+### 7.4.3 Pemeriksaan lease pada tengen
+ 
+Dijalankan segera setelah seluruh klien meminta lease:
+ 
+```bash
+cat /var/lib/dhcp/dhcpd.leases
+```
+ 
+ 
+## 7.5 Hasil Pemeriksaan
+ 
+### 7.5.1 IP yang diperoleh klien dan kesesuaian dengan pool
+ 
+| Divisi | Klien | IP yang diperoleh | Kebijakan | Rentang yang diizinkan | Sesuai |
+|---|---|---|---|---|---|
+| A | itadori | 10.74.2.10 | Pool 1 | 10.74.2.10 - 10.74.2.35 | Ya |
+| A | fushiguro | 10.74.2.11 | Pool 1 | 10.74.2.10 - 10.74.2.35 | Ya |
+| A | okkotsu | 10.74.2.70 | Pool 2 | 10.74.2.70 - 10.74.2.95 | Ya |
+| A | zenin | 10.74.2.71 | Pool 2 | 10.74.2.70 - 10.74.2.95 | Ya |
+| B | kusakabe | 10.74.3.10 | Short lease | 10.74.3.10 - 10.74.3.89 | Ya |
+| B | ino | 10.74.3.11 | Short lease | 10.74.3.10 - 10.74.3.89 | Ya |
+| B | miwa | 10.74.3.100 | Long lease | 10.74.3.100 - 10.74.3.199 | Ya |
+| B | kugisaki | 10.74.3.99 | Static lease | 10.74.3.99 (reservasi) | Ya |
+ 
+### 7.5.2 Konfigurasi jaringan yang diterima tiap klien
+ 
+Tabel berikut diisi dari hasil `ip a`, `ip route`, dan `cat /etc/resolv.conf` pada tiap klien.
+| Klien | IP/prefix | Gateway | Broadcast | Lease time |
+|---|---|---|---|---|
+| itadori | 10.74.2.10/24 | 10.74.2.1 | 10.74.2.255 | 600 detik (10 menit) |
+| fushiguro | 10.74.2.11/24 | 10.74.2.1 | 10.74.2.255 | 600 detik (10 menit) |
+| zenin | 10.74.2.71/24 | 10.74.2.1 | 10.74.2.255 | 600 detik (10 menit) |
+| okkotsu | 10.74.2.70/24 | 10.74.2.1 | 10.74.2.255 | 600 detik (10 menit) |
+| ino | 10.74.3.11/24 | 10.74.3.1 | 10.74.3.255 | 1800 detik (30 menit) |
+| kusakabe | 10.74.3.10/24 | 10.74.3.1 | 10.74.3.255 | 1800 detik (30 menit) |
+| miwa | 10.74.3.100/24 | 10.74.3.1 | 10.74.3.255 | 43200 detik (12 jam) |
+| kugisaki | 10.74.3.99/24 | 10.74.3.1 | 10.74.3.255 | _(tidak tersedia)_ |
+ 
+ <img src="images/soal7_bukti1.png">
+ <img src="images/soal7_bukti2.png">
+
+> **Screenshot itadori:** 
+<img src="images/soal7_bukti_itadori.png">
+
+> **Screenshot fushiguro:** 
+<img src="images/soal7_bukti_fushiguro.png">
+
+> **Screenshot zenin:**
+<img src="images/soal7_bukti_zenin"
+
+> **Screenshot okkotsu:** 
+<img src="images/soal7_bukti_okkotsu.png">
+
+> **Screenshot ino:** 
+<img src="images/soal7_bukti_ino .png">
+
+> **Screenshot kusakabe:**
+<img src="images/soal7_bukti_kusakabe.png">
+
+> **Screenshot miwa:** 
+<img src="images/soal7_bukti_miwa.png">
+
+> **Screenshot kugisaki:** 
+<img src="images/soal7_bukti_kugisaki .png">
+ 
+### 7.5.3 Kugisaki tidak muncul pada `dhcpd.leases`
+ 
+Kugisaki memperoleh `10.74.3.99` dengan benar, tetapi alamat itu **tidak tercatat** pada `/var/lib/dhcp/dhcpd.leases`. Hal ini bukan kesalahan konfigurasi, dengan penjelasan berikut:
+ 
+- Berkas `dhcpd.leases` mencatat lease yang **dialokasikan dari pool dinamis**. Kugisaki tidak memakai pool, karena alamatnya didefinisikan secara tetap melalui deklarasi `host kugisaki` dengan `fixed-address 10.74.3.99`.
+- Alamat reservasi ditentukan sepenuhnya oleh konfigurasi, sehingga server tidak perlu melacak masa berlaku atau status ketersediaannya seperti alamat pada pool. Pada ISC dhcpd, host dengan `fixed-address` umumnya tidak dicatat di berkas lease.
+- Kugisaki bukan anggota class `short-lease` maupun `long-lease`. Jika reservasi tidak ada, kugisaki tidak akan memperoleh IP sama sekali. Diperolehnya `10.74.3.99` membuktikan bahwa reservasi yang bekerja.
+Bukti bahwa kugisaki memperoleh alamat sesuai reservasi diambil dari:
+ 
+1. Keluaran `udhcpc` pada kugisaki: `lease of 10.74.3.99 obtained from 10.74.4.10, lease time 600`.
+2. Keluaran `ip a` pada kugisaki: `inet 10.74.3.99/24`.
+3. Blok `host kugisaki` pada `/etc/dhcp/dhcpd.conf` dengan `fixed-address 10.74.3.99`.
+
+
 ## 8
 **Sebelum Curtain dibuka kembali, buktikan bahwa proses pemberian alamat berjalan sesuai protokol. Lakukan packet capture saat salah satu client Network 2 atau Network 3 meminta lease baru. Gunakan tcpdump pada tengen atau jalur menuju Data Center untuk menunjukkan urutan DHCPDISCOVER → DHCPOFFER → DHCPREQUEST → DHCPACK. Identifikasi alamat server, alamat yang diberikan, lease time, dan field giaddr. Pastikan nilai giaddr sesuai dengan interface jichi yang menerima request dari subnet client.**
 
