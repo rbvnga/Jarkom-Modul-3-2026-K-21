@@ -644,6 +644,245 @@ Pada `ip route`, klien seharusnya memiliki default route melalui `10.74.3.1`. Pa
 ## 6
 **Kugisaki ditetapkan sebagai personel VIP yang harus mempertahankan alamat yang sama setiap kali terhubung. Buat DHCP static lease berdasarkan MAC Address client tersebut dengan fixed address [PREFIX IP].3.99. Pastikan alamat ini berada di luar seluruh pool dinamis, validasi konfigurasi server, lalu renew lease pada client. Buktikan bahwa alamat yang diterima sesuai dengan reservasi.**
 
+## 6.1 Tujuan
+
+1. Membuat **DHCP static lease** berdasarkan MAC Address kugisaki dengan **fixed address `10.74.3.99`**, sehingga kugisaki selalu memperoleh alamat yang sama setiap kali terhubung.
+2. Memastikan alamat `10.74.3.99` berada **di luar seluruh pool dinamis**.
+3. Memvalidasi konfigurasi server, lalu melakukan **renew lease** pada klien.
+4. Membuktikan alamat yang diterima sesuai dengan reservasi.
+
+## 6.2 Tabel Rancangan
+
+| Parameter | Nilai |
+|---|---|
+| Klien | kugisaki |
+| Network | Network 3 (Divisi B), `10.74.3.0/24` |
+| MAC Address | `02:42:7c:b4:fc:00` |
+| Fixed address | `10.74.3.99` |
+| Gateway | `10.74.3.1` |
+| DHCP Server | tengen, `10.74.4.10` (melalui DHCP Relay jichi) |
+
+## 6.3 Perubahan yang Ditambahkan
+
+Perubahan hanya dilakukan pada **tengen**. Jichi (relay) dan klien lain tidak diubah.
+
+| No | Bagian | Perubahan |
+|---|---|---|
+| 1 | Variabel script | Menambah `MAC_KUGISAKI="02:42:7c:b4:fc:00"` |
+| 2 | Daftar pengecekan penulisan config | Menambah `$MAC_KUGISAKI` pada perulangan `for M in ...` agar `dhcpd.conf` ditulis ulang otomatis |
+| 3 | `dhcpd.conf`, subnet Network 3 | Menambah blok `host kugisaki` dengan `hardware ethernet` dan `fixed-address 10.74.3.99` |
+
+Blok yang ditambahkan pada subnet Network 3:
+
+```bash
+# Static lease kugisaki (VIP): 10.74.3.99 berada di luar seluruh pool
+host kugisaki {
+  hardware ethernet 02:42:7c:b4:fc:00;
+  fixed-address 10.74.3.99;
+}
+```
+
+## 6.4  Konfigurasi
+
+### 6.4.1 Mengambil MAC Address kugisaki
+
+Pada kugisaki:
+
+```bash
+ip link show eth0
+```
+
+Hasil: `link/ether 02:42:7c:b4:fc:00`.
+
+### 6.4.2 Deklarasi host
+
+```bash
+subnet 10.74.3.0 netmask 255.255.255.0 {
+  option routers 10.74.3.1;
+  option broadcast-address 10.74.3.255;
+  option domain-name-servers 10.74.1.2, 10.74.1.3;
+
+  pool {
+    range 10.74.3.10 10.74.3.89;
+    allow members of "short-lease";
+  }
+
+  pool {
+    range 10.74.3.100 10.74.3.199;
+    allow members of "long-lease";
+  }
+
+  host kugisaki {
+    hardware ethernet 02:42:7c:b4:fc:00;
+    fixed-address 10.74.3.99;
+  }
+}
+```
+
+Penjelasan:
+
+- Deklarasi `host` membuat server langsung memberikan alamat yang tertulis ketika menerima permintaan dari MAC tersebut, tanpa memilih dari pool.
+- Blok ditempatkan di dalam subnet Network 3, sehingga kugisaki mewarisi `routers`, `broadcast-address`, dan `domain-name-servers` milik Network 3.
+- Kugisaki tidak termasuk class `short-lease` maupun `long-lease`. Alamatnya berasal dari reservasi, bukan dari pool.
+- Lama lease kugisaki memakai nilai global (`default-lease-time 600`) karena soal tidak menetapkan durasi khusus untuk reservasi.
+
+### 6.4.3 Script `setup_tengen.sh`
+
+```bash
+#!/bin/bash
+# TENGEN - DHCP Server (isc-dhcp-server) 10.74.4.10
+
+KELOMPOK="K-21"
+
+# MAC ADDRESS KLIEN NETWORK 2
+MAC_ITADORI="02:42:be:59:63:00"
+MAC_FUSHIGURO="02:42:58:39:03:00"
+MAC_ZENIN="02:42:93:36:d2:00"
+MAC_OKKOTSU="02:42:6b:dc:19:00"
+
+# MAC ADDRESS KLIEN NETWORK 3
+MAC_INO="02:42:b6:4e:2a:00"
+MAC_KUSAKABE="02:42:da:db:58:00"
+MAC_MIWA="02:42:58:d7:86:00"
+MAC_KUGISAKI="02:42:7c:b4:fc:00"
+
+# Pastikan eth0 punya IP statis tengen dan rute default ke jichi
+if ! ip -4 addr show eth0 | grep -q '10.74.4.10/24'; then
+  ip addr add 10.74.4.10/24 dev eth0 2>/dev/null
+  ip link set eth0 up
+fi
+ip route replace default via 10.74.4.1
+
+# Install jika belum terpasang
+if ! dpkg -s isc-dhcp-server >/dev/null 2>&1; then
+  apt-get update >/dev/null 2>&1
+  apt-get install -y isc-dhcp-server >/dev/null 2>&1
+fi
+
+# Interface DHCP
+if ! grep -q '^INTERFACESv4="eth0"' /etc/default/isc-dhcp-server 2>/dev/null; then
+  cat <<'EOF' > /etc/default/isc-dhcp-server
+INTERFACESv4="eth0"
+INTERFACESv6=""
+EOF
+fi
+
+# File lease
+mkdir -p /var/lib/dhcp
+[ -f /var/lib/dhcp/dhcpd.leases ] || touch /var/lib/dhcp/dhcpd.leases
+
+# dhcpd.conf: ditulis ulang jika belum memuat semua MAC dan domain-search kelompok
+ADA=1
+for M in $MAC_ITADORI $MAC_FUSHIGURO $MAC_ZENIN $MAC_OKKOTSU $MAC_INO $MAC_KUSAKABE $MAC_MIWA $MAC_KUGISAKI "$KELOMPOK.com"; do
+  grep -q "$M" /etc/dhcp/dhcpd.conf 2>/dev/null || ADA=0
+done
+
+if [ "$ADA" = 0 ]; then
+  service isc-dhcp-server stop >/dev/null 2>&1
+  : > /var/lib/dhcp/dhcpd.leases   # kosongkan lease lama agar pengujian bersih
+  cat <<EOF > /etc/dhcp/dhcpd.conf
+default-lease-time 600;
+max-lease-time 7200;
+authoritative;
+
+option domain-search "$KELOMPOK.com";
+
+# Class Network 2: Pool 1 (itadori, fushiguro) dan Pool 2 (zenin, okkotsu)
+class "pool1" {
+  match if (substring(hardware, 1, 6) = $MAC_ITADORI
+         or substring(hardware, 1, 6) = $MAC_FUSHIGURO);
+}
+
+class "pool2" {
+  match if (substring(hardware, 1, 6) = $MAC_ZENIN
+         or substring(hardware, 1, 6) = $MAC_OKKOTSU);
+}
+
+# Class Network 3: short lease 30 menit (ino, kusakabe), long lease 12 jam (miwa)
+class "short-lease" {
+  match if (substring(hardware, 1, 6) = $MAC_INO
+         or substring(hardware, 1, 6) = $MAC_KUSAKABE);
+  default-lease-time 1800;
+  max-lease-time 1800;
+}
+
+class "long-lease" {
+  match if (substring(hardware, 1, 6) = $MAC_MIWA);
+  default-lease-time 43200;
+  max-lease-time 43200;
+}
+
+# Network 4 - subnet lokal tengen, TANPA pool dinamis
+subnet 10.74.4.0 netmask 255.255.255.0 {
+}
+
+# Network 2 - Divisi A (lewat DHCP relay)
+# Rentang 10.74.2.36 - 10.74.2.69 tidak dialokasikan
+subnet 10.74.2.0 netmask 255.255.255.0 {
+  option routers 10.74.2.1;
+  option broadcast-address 10.74.2.255;
+  option domain-name-servers 10.74.1.2, 10.74.1.3;
+
+  pool {
+    range 10.74.2.10 10.74.2.35;
+    allow members of "pool1";
+  }
+
+  pool {
+    range 10.74.2.70 10.74.2.95;
+    allow members of "pool2";
+  }
+}
+
+# Network 3 - Divisi B (lewat DHCP relay)
+subnet 10.74.3.0 netmask 255.255.255.0 {
+  option routers 10.74.3.1;
+  option broadcast-address 10.74.3.255;
+  option domain-name-servers 10.74.1.2, 10.74.1.3;
+
+  pool {
+    range 10.74.3.10 10.74.3.89;
+    allow members of "short-lease";
+  }
+
+  pool {
+    range 10.74.3.100 10.74.3.199;
+    allow members of "long-lease";
+  }
+
+  # Static lease kugisaki (VIP): 10.74.3.99 berada di luar seluruh pool
+  host kugisaki {
+    hardware ethernet $MAC_KUGISAKI;
+    fixed-address 10.74.3.99;
+  }
+}
+EOF
+fi
+
+# Validasi lalu jalankan service
+dhcpd -t -cf /etc/dhcp/dhcpd.conf
+rm -f /var/run/dhcpd.pid
+service isc-dhcp-server restart
+service isc-dhcp-server status
+ps aux | grep '[d]hcpd'
+```
+
+Catatan: lease lama dikosongkan saat konfigurasi ditulis ulang agar pengujian tidak terpengaruh lease sebelumnya.
+
+## 6.5 Pembuktian
+
+### 6.5.1 Renew lease pada kugisaki
+
+Perintah pada kugisaki:
+
+```bash
+udhcpc -i eth0
+ip a
+ip route
+```
+<img src="images/soal6_bukti_kugisaki.png">
+
+
 ## 7
 **Setelah aturan alokasi diterapkan, pastikan setiap client menerima konfigurasi jaringan sesuai wilayahnya: subnet mask 255.255.255.0 (/24), gateway dan broadcast address yang benar, DNS [PREFIX IP].1.2 serta [PREFIX IP].1.3, dan domain-search yang ditentukan. Periksa IP address dan routing seluruh client Divisi A dan Divisi B, kemudian cocokkan lease dengan /var/lib/dhcp/dhcpd.leases pada tengen. Pastikan tidak ada alamat yang bertabrakan atau berada di luar kebijakan pool.**
 
