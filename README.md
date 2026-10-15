@@ -1197,7 +1197,7 @@ ip a
 | 13 | 01:23:15,459 | 10.74.4.1 | 10.74.4.10 | **DHCP Request** | 0x2dc7fc7e |
 | 14 | 01:23:15,459 | 10.74.4.10 | 10.74.2.1 | **DHCP ACK** | 0x2dc7fc7e |
 
-### 8.4.2 Rincian paket DHCP Offer (No. 12)
+### 8.4.2 Rincian paket DHCP Offer 
 
 | Field | Nilai | Keterangan |
 |---|---|---|
@@ -1224,9 +1224,9 @@ Opsi pada paket Offer, dibaca dari isi paket (hex dump):
 | 15 Domain Name | K-21.com | Domain kelompok |
 | 28 Broadcast Address | 10.74.2.255 | Broadcast Network 2 |
 
-> **Screenshot rincian paket Offer:** _(tempel hasil di sini)_
+<img src="images/soal8_bukti offer.png">
 
-### 8.4.3 Rincian paket DHCP ACK (No. 14)
+### 8.4.3 Rincian paket DHCP ACK 
 
 | Field | Nilai |
 |---|---|
@@ -1235,7 +1235,7 @@ Opsi pada paket Offer, dibaca dari isi paket (hex dump):
 | DHCP Server Identifier (54) | 10.74.4.10|
 | IP Address Lease Time (51) | 8 menit 16 detik (496)|
 
-> **Screenshot rincian paket ACK:** _(tempel hasil di sini)_
+<img src="images/soal8_bukti ack.png">
 
 ### 8.4.4 Ringkasan identifikasi
 
@@ -1336,6 +1336,128 @@ ip route
 
 ## 10
 **Setelah gangguan Shibuya tertangani, pastikan pemulihan bertahan setelah restart. Aktifkan autostart DHCP Server pada tengen dan DHCP Relay pada jichi, lalu restart kedua node. Verifikasi status layanan, IP, gateway, lease, dan konektivitas client Network 2–3. Pastikan kebijakan Pool 1, Pool 2, short lease, long lease, dan fixed address tetap berlaku.**
+# Soal 10: Pemulihan Bertahan Setelah Restart
+
+Tujuan: memastikan DHCP Server (tengen) dan DHCP Relay (jichi) aktif kembali setelah kedua node di-restart, dan seluruh kebijakan pemberian alamat (Pool 1, Pool 2, short lease, long lease, fixed address kugisaki) tetap berlaku.
+
+## 10.1 Mengaktifkan autostart
+
+Pendaftaran autostart dimasukkan ke dalam script yang sudah dipanggil `.bashrc` di masing-masing node.
+
+**tengen** (`/root/setup_tengen.sh`):
+
+```bash
+if [ -d /run/systemd/system ]; then
+  systemctl enable isc-dhcp-server >/dev/null 2>&1
+else
+  update-rc.d isc-dhcp-server defaults >/dev/null 2>&1
+fi
+```
+
+**jichi** (`/root/setup_jichi.sh`):
+
+```bash
+if [ -d /run/systemd/system ]; then
+  systemctl enable isc-dhcp-relay >/dev/null 2>&1
+else
+  update-rc.d isc-dhcp-relay defaults >/dev/null 2>&1
+fi
+```
+
+Selain itu, `/root/.bashrc` di kedua node memanggil script masing-masing:
+
+```bash
+# tengen
+chmod +x /root/setup_tengen.sh
+./setup_tengen.sh
+
+# jichi
+chmod +x /root/setup_jichi.sh
+./setup_jichi.sh
+```
+
+Script bersifat idempotent: `setup_tengen.sh` tidak menulis ulang `dhcpd.conf` bila semua MAC dan domain sudah ada, sehingga kebijakan dan lease tidak hilang saat dijalankan ulang.
+
+---
+
+## 10.2 Restart kedua node
+
+Urutan: **jichi** lebih dulu (jalur ke luar dan relay), lalu **tengen**, lalu 8 klien.
+
+Bukti bahwa layanan dimulai ulang setelah restart:
+
+- `dhcpd` di tengen berstatus START `19:42` (PID 126).
+- `dhcrelay` di jichi berstatus START `19:42` (PID 138).
+- `/var/lib/dhcp/dhcpd.leases` ditulis ulang oleh dhcpd saat start: entri lama dipadatkan, ditutup baris `server-duid`, lalu entri baru (`19:42:56` dan seterusnya) ditulis setelahnya.
+
+---
+
+## 10.3 Verifikasi status layanan, IP, dan gateway
+
+### tengen (DHCP Server)
+
+```text
+root@tengen:~# ps -p 1 -o comm=
+dumb-init
+
+root@tengen:~# ps aux | grep '[d]hcpd'
+root   126  0.0  0.0  9864  7356 ?  Ss  19:42  0:00 /usr/sbin/dhcpd -4 -q -cf /etc/dhcp/dhcpd.conf eth0
+
+root@tengen:~# ip route
+default via 10.74.4.1 dev eth0
+10.74.4.0/24 dev eth0 proto kernel scope link src 10.74.4.10
+```
+
+| Pemeriksaan | Hasil | 
+|---|---|
+| Layanan `dhcpd` | berjalan, melayani eth0 |
+| IP eth0 | `10.74.4.10/24` | 
+| Gateway | default via `10.74.4.1` |
+
+### jichi (DHCP Relay, router, NAT)
+
+```text
+root@Jichi:~# ps aux | grep '[d]hcrelay'
+root   138  0.0  0.0  5992  3544 ?  Ss  19:42  0:00 /usr/sbin/dhcrelay -q -i eth2 -i eth3 -i eth4 10.74.4.10
+
+root@Jichi:~# cat /proc/sys/net/ipv4/ip_forward
+1
+
+root@Jichi:~# iptables -t nat -L -n
+Chain POSTROUTING (policy ACCEPT)
+target      prot opt source      destination
+MASQUERADE  all  --  0.0.0.0/0   0.0.0.0/0
+```
+
+| Interface | IP | Peran |
+|---|---|---|
+| eth0 | `192.168.122.17/24` | ke NAT1 (internet) |
+| eth1 | `10.74.1.1/24` | Network 1 (Data Center) |
+| eth2 | `10.74.2.1/24` | Network 2 (Divisi A), gateway klien |
+| eth3 | `10.74.3.1/24` | Network 3 (Divisi B), gateway klien |
+| eth4 | `10.74.4.1/24` | Network 4, jalur ke tengen |
+
+| Pemeriksaan | Hasil | 
+|---|---|
+| Layanan `dhcrelay` | berjalan: eth2, eth3, eth4 menuju `10.74.4.10` |
+| IP forwarding | `1` | 
+| NAT | aturan `MASQUERADE` ada | 
+| IP seluruh interface | sesuai tabel di atas |
+---
+
+## 10.4 Verifikasi lease dan konektivitas klien Network 2 dan 3
+
+### Lease di tengen (`/var/lib/dhcp/dhcpd.leases`)
+
+| Klien | MAC | IP | Lama lease | Network |
+|---|---|---|---|---|
+| itadori | `02:42:be:59:63:00` | `10.74.2.10` | 600 dtk (10 mnt) | 2 |
+| fushiguro | `02:42:58:39:03:00` | `10.74.2.11` | 600 dtk (10 mnt) | 2 |
+| okkotsu | `02:42:6b:dc:19:00` | `10.74.2.70` | 600 dtk (10 mnt) | 2 |
+| zenin | `02:42:93:36:d2:00` | `10.74.2.71` | 600 dtk (10 mnt) | 2 |
+| kusakabe | `02:42:da:db:58:00` | `10.74.3.10` | 1800 dtk (30 mnt) | 3 |
+| ino | `02:42:b6:4e:2a:00` | `10.74.3.11` | 1800 dtk (30 mnt) | 3 |
+| miwa | `02:42:58:d7:86:00` | `10.74.3.100` | 43200 dtk (12 jam) | 3 |
 
 ## 11
 **Utahime dan Shoko ditugaskan membangun sistem penamaan domain resmi agar seluruh pos tidak perlu menghafal alamat IP mentah. Konfigurasikan BIND9 pada utahime sebagai DNS Master dan shoko sebagai DNS Slave untuk mengelola domain jujutsu.<xxxx>.com. Atur SOA record, NS delegasi untuk kedua server, dan terapkan allow-transfer dari Master ke Slave. Pastikan file zona berhasil tersinkronisasi otomatis ke shoko saat nomor serial di utahime dinaikkan, lalu buktikan dengan melakukan query dig ke kedua server dari salah satu client.**
