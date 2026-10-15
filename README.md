@@ -1336,7 +1336,6 @@ ip route
 
 ## 10
 **Setelah gangguan Shibuya tertangani, pastikan pemulihan bertahan setelah restart. Aktifkan autostart DHCP Server pada tengen dan DHCP Relay pada jichi, lalu restart kedua node. Verifikasi status layanan, IP, gateway, lease, dan konektivitas client Network 2–3. Pastikan kebijakan Pool 1, Pool 2, short lease, long lease, dan fixed address tetap berlaku.**
-# Soal 10: Pemulihan Bertahan Setelah Restart
 
 Tujuan: memastikan DHCP Server (tengen) dan DHCP Relay (jichi) aktif kembali setelah kedua node di-restart, dan seluruh kebijakan pemberian alamat (Pool 1, Pool 2, short lease, long lease, fixed address kugisaki) tetap berlaku.
 
@@ -1378,35 +1377,17 @@ chmod +x /root/setup_jichi.sh
 
 Script bersifat idempotent: `setup_tengen.sh` tidak menulis ulang `dhcpd.conf` bila semua MAC dan domain sudah ada, sehingga kebijakan dan lease tidak hilang saat dijalankan ulang.
 
----
+## 10.2 Isi Setup
 
-## 10.2 Restart kedua node
+### 10.2.1 Isi Setup Jichi
 
-Urutan: **jichi** lebih dulu (jalur ke luar dan relay), lalu **tengen**, lalu 8 klien.
+### 10.2.2 Isi Setup Tengen
 
-Bukti bahwa layanan dimulai ulang setelah restart:
-
-- `dhcpd` di tengen berstatus START `19:42` (PID 126).
-- `dhcrelay` di jichi berstatus START `19:42` (PID 138).
-- `/var/lib/dhcp/dhcpd.leases` ditulis ulang oleh dhcpd saat start: entri lama dipadatkan, ditutup baris `server-duid`, lalu entri baru (`19:42:56` dan seterusnya) ditulis setelahnya.
-
----
-
-## 10.3 Verifikasi status layanan, IP, dan gateway
+## 10.3 Verifikasi status layanan, IP, dan gateway setelah Restart Node
 
 ### tengen (DHCP Server)
 
-```text
-root@tengen:~# ps -p 1 -o comm=
-dumb-init
-
-root@tengen:~# ps aux | grep '[d]hcpd'
-root   126  0.0  0.0  9864  7356 ?  Ss  19:42  0:00 /usr/sbin/dhcpd -4 -q -cf /etc/dhcp/dhcpd.conf eth0
-
-root@tengen:~# ip route
-default via 10.74.4.1 dev eth0
-10.74.4.0/24 dev eth0 proto kernel scope link src 10.74.4.10
-```
+<img src="images/soal10_tengen.png">
 
 | Pemeriksaan | Hasil | 
 |---|---|
@@ -1416,18 +1397,7 @@ default via 10.74.4.1 dev eth0
 
 ### jichi (DHCP Relay, router, NAT)
 
-```text
-root@Jichi:~# ps aux | grep '[d]hcrelay'
-root   138  0.0  0.0  5992  3544 ?  Ss  19:42  0:00 /usr/sbin/dhcrelay -q -i eth2 -i eth3 -i eth4 10.74.4.10
-
-root@Jichi:~# cat /proc/sys/net/ipv4/ip_forward
-1
-
-root@Jichi:~# iptables -t nat -L -n
-Chain POSTROUTING (policy ACCEPT)
-target      prot opt source      destination
-MASQUERADE  all  --  0.0.0.0/0   0.0.0.0/0
-```
+<img src="images/soal10_jichi.png">
 
 | Interface | IP | Peran |
 |---|---|---|
