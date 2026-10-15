@@ -1304,7 +1304,7 @@ ip route
 service isc-dhcp-relay start
 ps aux | grep '[d]hcrelay'
 ```
-<img src="images/soal9_jichi_start.png_">
+<img src="images/soal9_jichi_start.png">
 
 ### 9.3.5 Mengulang permintaan lease pada klien
 
