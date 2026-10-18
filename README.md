@@ -1138,7 +1138,8 @@ Tabel berikut diisi dari hasil `ip a`, `ip route`, dan `cat /etc/resolv.conf` pa
 <img src="images/soal7_bukti_fushiguro.png">
 
 > **Screenshot zenin:**
-<img src="images/soal7_bukti_zenin.png"
+
+<img src="images/soal7_bukti_zenin.png">
 
 > **Screenshot okkotsu:** 
 <img src="images/soal7_bukti_okkotsu.png">
