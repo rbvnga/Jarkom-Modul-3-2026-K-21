@@ -434,7 +434,7 @@ ip route
 | Pool 1 | itadori | `02:42:be:59:63:00` |
 | Pool 1 | fushiguro | `02:42:58:39:03:00` |
 | Pool 2 | zenin | `02:42:93:36:d2:00` |
-| Pool 2 | okkotsu (node akkotsu) | `02:42:6b:dc:19:00` |
+| Pool 2 | okkotsu | `02:42:6b:dc:19:00` |
 
 MAC diperoleh dengan menjalankan perintah berikut pada setiap klien (nilai setelah `link/ether`):
 
@@ -1138,7 +1138,7 @@ Tabel berikut diisi dari hasil `ip a`, `ip route`, dan `cat /etc/resolv.conf` pa
 <img src="images/soal7_bukti_fushiguro.png">
 
 > **Screenshot zenin:**
-<img src="images/soal7_bukti_zenin"
+<img src="images/soal7_bukti_zenin.png"
 
 > **Screenshot okkotsu:** 
 <img src="images/soal7_bukti_okkotsu.png">
@@ -1615,7 +1615,7 @@ ps aux | grep '[d]hcpd'
 ### tengen (DHCP Server)
 
 ```bash
-ps aux | grep '[d]hcrelay'
+ps aux | grep '[d]hcpd'
 ip a
 ip route
 ```
