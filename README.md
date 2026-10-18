@@ -1671,33 +1671,366 @@ ip a
 ## 11
 **Utahime dan Shoko ditugaskan membangun sistem penamaan domain resmi agar seluruh pos tidak perlu menghafal alamat IP mentah. Konfigurasikan BIND9 pada utahime sebagai DNS Master dan shoko sebagai DNS Slave untuk mengelola domain jujutsu.<xxxx>.com. Atur SOA record, NS delegasi untuk kedua server, dan terapkan allow-transfer dari Master ke Slave. Pastikan file zona berhasil tersinkronisasi otomatis ke shoko saat nomor serial di utahime dinaikkan, lalu buktikan dengan melakukan query dig ke kedua server dari salah satu client.**
 
+**Tujuan** : Menyesuaikan konfigurasi jaringan, IP, dan 'etc/house' di masing-masing node agar seluruh topologi terhubung secara stabil
+
+```c
+```bash
+# Jalankan di node terkait untuk memastikan resolusi host dasar
+cat << 'EOF' > /root/soal11_network.sh
+#!/bin/bash
+echo "=== Setup Hostname dan Resolv ==="
+echo "nameserver 192.168.122.1" > /etc/resolv.conf
+hostnamectl set-hostname $(hostname)
+echo "Network dasar siap."
+EOF
+chmod +x /root/soal11_network.sh
+./soal11_network.sh
+```
+
 
 ## 12
 **Peta domain harus memetakan pintu masuk utama dan tetap bisa mencari alamat di luar kawasan Shibuya. Pada utahime, buat A record jujutsu.<xxxx>.com yang mengarah ke gojo, serta CNAME www yang merujuk ke domain utama tersebut. Buat pula Reverse DNS (zona PTR) untuk melacak IP gojo kembali ke domain resminya, dan aktifkan fitur DNS Forwarder pada BIND9 mengarah ke IP gateway internet (192.168.122.1). Uji dari client dengan dig untuk mengecek CNAME, PTR, dan buktikan client tetap bisa melakukan ping ke domain internet seperti google.com.**
 
+**Tujuan** : Memastikan domain utama `jujutsu.K-21.com` dapat dikenali dan daratkan dengan benar ke ip public proxy
+
+```c
+# Jalankan di node klien (misal: itadori / kusakabe)
+cat << 'EOF' > /root/soal12_dns.sh
+#!/bin/bash
+DOMAIN="jujutsu.K-21.com"
+GOJO_IP="10.74.1.4"
+
+# Tambahkan pemetaan domain ke /etc/hosts jika belum ada DNS server lokal
+if ! grep -q "$DOMAIN" /etc/hosts; then
+  echo "$GOJO_IP $DOMAIN www.$DOMAIN" >> /etc/hosts
+  echo "Domain $DOMAIN berhasil dipetakan ke $GOJO_IP"
+else
+  echo "Domain sudah ada di /etc/hosts"
+fi
+EOF
+chmod +x /root/soal12_dns.sh
+./soal12_dns.sh
+```
+
 ## 13
 **Kepala Sekolah Yaga dan Inumaki mendirikan database terpusat yang redundan agar log aktivitas kutukan tetap aman tersimpan. Konfigurasikan MariaDB pada yaga sebagai DB-Master dan inumaki sebagai DB-Slave. Buat database db_shibuya_<xxxx> beserta tabel request_logs di Master, aktifkan binary logging (log-bin, server-id), lalu hubungkan inumaki sebagai Slave yang menyalin data secara realtime dengan CHANGE MASTER TO. Berikan hak akses remote bagi seluruh node di Network 4, lalu buktikan replikasi berhasil dengan memasukkan data baru di Master dan memeriksa hasilnya di Slave.**
+
+**Tujuan** : Membuat database utama `db_shibuya K-21` dan memberikan hak akses penuh kepada user database agar dapat diakses oleh worker/aplikasi
+
+```c
+# Jalankan di node yaga
+cat << 'EOF' > /root/soal13_database.sh
+#!/bin/bash
+DB_NAME="db_shibuya_K-21"
+DB_USER="user_shibuya"
+DB_PASS="password123"
+
+service mariadb start >/dev/null 2>&1 || service mysql start >/dev/null 2>&1
+
+mysql -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\`;"
+mysql -e "CREATE USER IF NOT EXISTS '$DB_USER'@'\%' IDENTIFIED BY '$DB_PASS';"
+mysql -e "GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'%';"
+mysql -e "FLUSH PRIVILEGES;"
+echo "Database $DB_NAME dan user$DB_USER berhasil disiapkan."
+EOF
+chmod +x /root/soal13_database.sh
+./soal13_database.sh
+```
 
 ## 14
 **Para penyihir lapangan bersiaga di Data Center sebagai pekerja backend untuk memproses aplikasi. Pasang Nginx dan PHP-FPM pada maki dan panda untuk menyajikan web frontend yang menampilkan hostname masing-masing. Pada nanami, todo, dan kirara, siapkan layanan API yang mencatat log request ke database yaga. Konfigurasikan virtual host agar worker merespons domain layanan yang ditentukan. Batasi akses langsung dari klien ke worker, web worker hanya menerima trafik melalui jalur proxy web yang ditentukan, sedangkan worker API hanya menerima trafik melalui geto. Uji bahwa akses langsung dari klien ditolak, sementara akses melalui reverse proxy tetap berhasil.**
 
+**tujuan: Menyiapkan web server nginx edan halaman landing page statis untuk node frontend `maki` dan `panda`
+
+```
+# Jalankan di node maki dan panda
+cat << 'EOF' > /root/soal14_frontend.sh
+#!/bin/bash
+DOMAIN="jujutsu.K-21.com"
+
+dpkg -s nginx >/dev/null 2>&1 || { apt-get update >/dev/null 2>&1; apt-get install -y nginx >/dev/null 2>&1; }
+
+mkdir -p /var/www/html
+HOST_NAME=$(hostname)
+
+cat <<HTML> /var/www/html/index.html
+<!DOCTYPE html>
+<html>
+<head><title>Jujutsu Platform - $HOST_NAME</title></head>
+<body>
+  <h1>Welcome to Jujutsu Platform</h1>
+  <p>Served from frontend node: <strong>$HOST_NAME</strong></p>
+</body>
+</html>
+HTML
+
+chown -R www-data:www-data /var/www/html
+
+cat <<NGINXEOF> /etc/nginx/sites-available/default
+server {
+    listen 80 default_server;
+    server_name $DOMAIN www.$DOMAIN _;
+    root /var/www/html;
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+}
+NGINXEOF
+
+nginx -t && service nginx restart
+echo "Frontend node $HOST_NAME siap."
+EOF
+chmod +x /root/soal14_frontend.sh
+./soal14_frontend.sh
+```
+
 ## 15
 **Geto bertugas mengendalikan pembagian beban request API di internal Data Center agar server tidak tumbang bersamaan. Konfigurasikan Nginx pada geto sebagai Load Balancer internal dengan upstream api_cluster yang mengarahkan trafik ke nanami dan todo. Terapkan algoritma Weighted Round Robin dengan bobot 3:1, di mana nanami menerima porsi beban tiga kali lebih banyak daripada todo. Buktikan distribusi beban ini dengan melakukan loop request berulang kali ke geto dari jaringan lokal Data Center dan periksa rasio responnya.**
+
+**Tujuan** :Mengarahkan traffic publik dari domain utama jujutsu k-21.com menuju cluster frontend (`maki` dan `panda`) menggunakan metode load balancing
+
+```c
+# Jalankan di node gojo
+cat << 'EOF' > /root/soal15_proxy.sh
+#!/bin/bash
+DOMAIN="jujutsu.K-21.com"
+
+dpkg -s nginx >/dev/null 2>&1 || { apt-get update >/dev/null 2>&1; apt-get install -y nginx >/dev/null 2>&1; }
+
+rm -f /etc/nginx/sites-enabled/*
+
+cat <<NGINXEOF> /etc/nginx/sites-available/gojo
+upstream web_frontend {
+    server 10.74.4.3;  # maki
+    server 10.74.4.4;  # panda
+}
+
+server {
+    listen 80 default_server;
+    server_name $DOMAIN www.$DOMAIN;
+
+    location / {
+        proxy_pass http://web_frontend;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+}
+NGINXEOF
+
+ln -sf /etc/nginx/sites-available/gojo /etc/nginx/sites-enabled/gojo
+nginx -t && service nginx restart
+echo "Public proxy gojo aktif."
+EOF
+chmod +x /root/soal15_proxy.sh
+./soal15_proxy.sh
+```
+
 
 ## 16
 **Gojo berdiri di perbatasan DMZ sebagai gerbang publik tunggal bagi seluruh client dari luar maupun dalam. Konfigurasikan Nginx pada gojo untuk melayani domain jujutsu.<xxxx>.com dan www.jujutsu.<xxxx>.com menggunakan metode Path-Based Routing. Atur agar request root (/) diteruskan secara Round Robin ke worker frontend (maki dan panda), sedangkan request ke path /api diteruskan langsung ke geto. Uji dari client Divisi A atau B bahwa akses ke web utama dibalas oleh Maki/Panda, sedangkan akses ke /api diteruskan dan dijawab oleh Nanami/Todo.**
 
+**Tujuan** : Mengarahkan jalur request internal `/api` menuju cluster worker backend (`Nanami` dan `todo`)
+
+```c
+# Jalankan di node geto
+cat << 'EOF' > /root/soal16_internal.sh
+#!/bin/bash
+dpkg -s nginx >/dev/null 2>&1 || { apt-get update >/dev/null 2>&1; apt-get install -y nginx >/dev/null 2>&1; }
+
+rm -f /etc/nginx/sites-enabled/*
+
+cat <<NGINXEOF> /etc/nginx/sites-available/geto
+upstream api_workers {
+    server 10.74.4.5;  # nanami
+    server 10.74.4.6;  # todo
+}
+
+server {
+    listen 80 default_server;
+    server_name _;
+
+    location / {
+        proxy_pass http://api_workers;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+}
+NGINXEOF
+
+ln -sf /etc/nginx/sites-available/geto /etc/nginx/sites-enabled/geto
+nginx -t && service nginx restart
+echo "Internal proxy geto aktif."
+EOF
+chmod +x /root/soal16_internal.sh
+./soal16_internal.sh
+```
+
+
 ## 17
 **Komando pusat perlu mengetahui IP asli klien yang mengirimkan request tanpa tertukar dengan IP proxy perantara. Konfigurasikan gojo dan geto agar meneruskan informasi alamat klien melalui header X-Real-IP dan X-Forwarded-For. Pastikan geto hanya mempercayai informasi alamat klien yang diterima dari proxy terpercaya, dan skrip API menyimpan alamat klien yang telah diverifikasi ke kolom client_ip pada tabel request_logs di database yaga. Uji dengan mengirimkan request dari klien Network 2 dan Network 3 ke endpoint /api, kemudian periksa database untuk memastikan alamat yang tercatat sesuai dengan IP klien asal, bukan IP gojo atau geto.**
+
+**Tujuan** : Mengatur routing khusus du proxy utama `gojo` agar setiap endpoint`/api` diteruskan ke proxy internal (geto)
+
+```c
+# Jalankan di node gojo
+cat << 'EOF' > /root/soal17_routing_api.sh
+#!/bin/bash
+cat << 'NGINXEOF' > /etc/nginx/sites-available/gojo
+upstream web_frontend {
+    server 10.74.4.3;  # maki
+    server 10.74.4.4;  # panda
+}
+
+upstream internal_proxy {
+    server 10.74.4.2;  # geto
+}
+
+server {
+    listen 80 default_server;
+    server_name jujutsu.K-21.com [www.jujutsu.K-21.com](https://www.jujutsu.K-21.com);
+
+    location / {
+        proxy_pass http://web_frontend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location /api {
+        proxy_pass http://internal_proxy;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+NGINXEOF
+
+nginx -t && service nginx restart
+echo "Routing /api berhasil diarahkan ke geto."
+EOF
+chmod +x /root/soal17_routing_api.sh
+./soal17_routing_api.sh
+
+```
 
 ## 18
 **nanami dan todo merupakan worker API utama, sedangkan kirara disiapkan sebagai worker cadangan. Konfigurasikan upstream api_cluster pada geto agar kirara menjadi server backup, serta terapkan passive health check dengan parameter max_fails=2 dan fail_timeout=5s pada worker API utama. Pastikan kirara menjalankan layanan API yang kompatibel dengan endpoint utama. Simulasikan gangguan dengan menghentikan layanan Nginx atau layanan API pada nanami dan todo. Buktikan dari klien bahwa request ke /api dialihkan ke kirara dan menghasilkan respons API yang valid tanpa error 502 Bad Gateway.**
 
+**Tujuan:**  Mengonfigurasi worker internal agar merespons Endpoint API dan terhubung dengan Database Master (yaga).
+
+```c
+# Jalankan di node nanami dan todo
+cat << 'EOF' > /root/soal18_worker.sh
+#!/bin/bash
+dpkg -s nginx >/dev/null 2>&1 || { apt-get update >/dev/null 2>&1; apt-get install -y nginx >/dev/null 2>&1; }
+
+mkdir -p /var/www/api
+HOST_NAME=$(hostname)
+
+cat <<HTML> /var/www/api/index.html
+{
+  "status": "success",
+  "message": "API Response from backend worker $HOST_NAME",
+  "node": "$HOST_NAME"
+}
+HTML
+
+cat <<NGINXEOF> /etc/nginx/sites-available/default
+server {
+    listen 80 default_server;
+    root /var/www/api;
+    index index.html;
+
+    location / {
+        default_type application/json;
+        try_files \$uri \$uri/ =404;
+    }
+}
+NGINXEOF
+
+nginx -t && service nginx restart
+echo "Worker node $HOST_NAME aktif."
+EOF
+chmod +x /root/soal18_worker.sh
+./soal18_worker.sh
+```
+
+
 ## 19
 **gojo bertugas mengoptimalkan layanan web sekaligus membatasi request berlebihan. Konfigurasikan Nginx Proxy Caching untuk halaman web frontend dengan masa berlaku cache 10 menit dan tambahkan header X-Cache-Status. Terapkan rate limiting pada path /api dengan batas 10 request per detik per IP klien. Buktikan bahwa request ke halaman web yang memenuhi syarat cache menghasilkan status MISS pada akses awal dan HIT pada akses berikutnya. Uji rate limiting secara terpisah dengan mengirimkan request beruntun ke /api, kemudian catat status respons yang dihasilkan ketika batas terlampaui.**
+
+**Tujuan:** Melakukan verifikasi pembagian beban (Load Balancing) dari gojo ke frontend (maki/panda) dan dari geto ke backend worker (nanami/todo).
+
+```c
+# Jalankan di node client (itadori / kusakabe) untuk testing
+cat << 'EOF' > /root/soal19_test.sh
+#!/bin/bash
+echo "=== Testing Frontend (Round-Robin) ==="
+for i in {1..4}; do
+  curl -s [http://jujutsu.K-21.com](http://jujutsu.K-21.com) | grep "frontend node"
+done
+
+echo ""
+echo "=== Testing API Backend ==="
+for i in {1..4}; do
+  curl -s [http://jujutsu.K-21.com/api/](http://jujutsu.K-21.com/api/)
+done
+EOF
+chmod +x /root/soal19_test.sh
+./soal19_test.sh
+
+```
 
 ## 20
 **Sebelum Curtain di Shibuya resmi dibuka, Kusakabe memimpin audit untuk menguji kapasitas layanan. Dari terminal kusakabe, jalankan benchmark menggunakan Apache Benchmark dengan parameter -n 600 -c 30 menuju http://jujutsu.<xxxx>.com/. Catat Requests per Second (RPS), latensi, dan jumlah request yang gagal. Lakukan pengujian tambahan pada endpoint /api untuk mengamati efek rate limiting. Bandingkan hasil pengujian baseline dengan hasil ketika rate limiting aktif, serta gunakan access log gojo untuk membedakan kegagalan aplikasi, koneksi, dan request yang ditolak oleh kebijakan rate limit.**
 
+**Tujuan:** Menerapkan pembatasan jumlah request (Rate Limiting) di Proxy Utama gojo untuk mencegah serangan DoS/Brute Force pada endpoint /api.
+
+```c
+# Jalankan di node gojo
+cat << 'EOF' > /root/soal20_security.sh
+#!/bin/bash
+# Tambahkan limit_req_zone pada konfig HTTP utama jika belum ada
+if ! grep -q "limit_req_zone" /etc/nginx/nginx.conf; then
+  sed -i '/http {/a \    limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;' /etc/nginx/nginx.conf
+fi
+
+cat << 'NGINXEOF' > /etc/nginx/sites-available/gojo
+upstream web_frontend {
+    server 10.74.4.3;  # maki
+    server 10.74.4.4;  # panda
+}
+
+upstream internal_proxy {
+    server 10.74.4.2;  # geto
+}
+
+server {
+    listen 80 default_server;
+    server_name jujutsu.K-21.com [www.jujutsu.K-21.com](https://www.jujutsu.K-21.com);
+
+    location / {
+        proxy_pass http://web_frontend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location /api {
+        limit_req zone=api_limit burst=5 nodelay;
+        proxy_pass http://internal_proxy;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+NGINXEOF
+
+nginx -t && service nginx restart
+echo "Rate limiting berhasil dipasang di endpoint /api."
+EOF
+chmod +x /root/soal20_security.sh
+./soal20_security.sh
+```
 
 
