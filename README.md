@@ -8,14 +8,17 @@
 
 ## 1
 **Ketika Curtain menutup Shibuya, jalur komunikasi antar zona Jujutsu High terputus. Pulihkan konektivitas dasar dengan mengonfigurasi jichi: eth0 memperoleh WAN dari NAT, sedangkan eth1–eth4 menjadi gateway Network 1–4 sesuai tabel pemetaan. Aktifkan IPv4 forwarding dan source NAT, lalu tetapkan IP statis host infrastruktur sesuai tabel spesifikasi. Buktikan konektivitas setiap host ke gateway dan akses eksternal dari host yang relevan.**
+
 ## 1.1 Tujuan
  
 1. Mengonfigurasi **jichi** sebagai router utama: `eth0` mendapat WAN dari NAT, `eth1`-`eth4` menjadi gateway Network 1-4.
 2. Mengaktifkan **IPv4 forwarding** dan **source NAT** pada jichi.
 3. Menetapkan **IP statis** pada host infrastruktur sesuai tabel pemetaan.
 4. Membuktikan konektivitas tiap host ke gateway dan akses eksternal dari host yang relevan.
+
 ## 1.2 Tabel Pemetaan
- <img src="images/soal1_topologi.png">
+ <img src="images/soal1_gns.png">
+
 ### 1.2.1 Interface jichi
  
 | Interface | Terhubung ke | IP Address | Keterangan |
@@ -399,6 +402,12 @@ ip route
 ```
 <img src="images/soal3_bukti.png">
 
+#### PENAMBAHAN KONFIGURASI DI SETIAP CLIENT ALPINET
+```bash
+   auto eth0
+   iface eth0 inet dhcp
+```
+
 
 ## 4
 **Agar tim Dev dan Support di Divisi A menerima jatah alamat yang berbeda, atur dua pool DHCP pada Network 2. Tetapkan Pool 1 ([PREFIX IP].2.10–[PREFIX IP].2.35) untuk itadori dan fushiguro, serta Pool 2 ([PREFIX IP].2.70–[PREFIX IP].2.95) untuk zenin dan okkotsu. Rentang [PREFIX IP].2.36–[PREFIX IP].2.69 tidak boleh dialokasikan. Karena seluruh client berada pada subnet yang sama, gunakan DHCP class berdasarkan MAC Address atau Client ID untuk memisahkan kedua kelompok.**
@@ -499,7 +508,7 @@ ip a
 | okkotsu | Pool 2 | 10.74.2.70 - 10.74.2.95 |  10.74.2.70 | 
 
 
-<img src="images/soal4_bukti_pool1_fushiguro.pngsoal4_">
+<img src="images/soal4_bukti_pool1_fushiguro.png">
 <img src="images/soal4_bukti_pool1_itadori.png">
 <img src="images/soal4_bukti_pool2_okkotsu.png">
 <img src="images/soal4_bukti_pool2_zenin.png">
@@ -522,7 +531,6 @@ ip a
 | short-lease | ino, kusakabe | 10.74.3.10 - 10.74.3.89 | 1800 detik (30 menit) | 1800 detik |
 | long-lease | miwa | 10.74.3.100 - 10.74.3.199 | 43200 detik (12 jam) | 43200 detik |
 
-Rentang `10.74.3.90 - 10.74.3.99` tidak dimasukkan ke pool mana pun.
 
 DHCP options untuk seluruh klien:
 
@@ -1230,7 +1238,7 @@ Opsi pada paket Offer, dibaca dari isi paket (hex dump):
 
 | Field | Nilai |
 |---|---|
-| Your (client) IP address | _(isi, dari paket 14)_ |
+| Your (client) IP address | 10.74.2.11 |
 | Relay agent IP address (giaddr) | 10.74.2.1 |
 | DHCP Server Identifier (54) | 10.74.4.10|
 | IP Address Lease Time (51) | 8 menit 16 detik (496)|
@@ -1606,6 +1614,12 @@ ps aux | grep '[d]hcpd'
 
 ### tengen (DHCP Server)
 
+```bash
+ps aux | grep '[d]hcrelay'
+ip a
+ip route
+```
+
 <img src="images/soal10_tengen.png">
 
 | Pemeriksaan | Hasil | 
@@ -1615,6 +1629,12 @@ ps aux | grep '[d]hcpd'
 | Gateway | default via `10.74.4.1` |
 
 ### jichi (DHCP Relay, router, NAT)
+```bash
+ps aux | grep '[d]hcrelay'
+iptables -t nat -L -n
+cat /proc/sys/net/ipv4/ip_forward
+ip a
+```
 
 <img src="images/soal10_jichi.png">
 
